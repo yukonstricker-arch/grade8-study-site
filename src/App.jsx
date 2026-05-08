@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Lock, Unlock, Settings, Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Volume2, Upload, Trash2, Edit3, Plus, X, Check, ChevronRight, ChevronLeft, Trophy, Flame, Target, BookOpen, Calculator, Globe, Languages, Cloud, Moon, Zap, Award, Clock, TrendingUp, Eye, EyeOff, RotateCcw, Save, Home, User, LogOut, Search, FileText, Youtube, Music, Wind, Headphones } from 'lucide-react';
+import { Lock, Unlock, Settings, Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Volume2, Upload, Trash2, Edit3, Plus, X, Check, ChevronRight, ChevronLeft, Trophy, Flame, Target, BookOpen, Calculator, Globe, Languages, Cloud, Moon, Zap, Award, Clock, TrendingUp, Eye, EyeOff, RotateCcw, Save, Home, User, LogOut, Search, FileText, PlayCircle, Music, Wind, Headphones } from 'lucide-react';
 
 // ============================================================
 // STORAGE HELPERS
