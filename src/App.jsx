@@ -2499,3 +2499,1661 @@ function FillBlanksView({ items, progress, updateProgress, theme }) {
     });
   };
 
+  const next = () => {
+    setIndex(i => (i + 1) % shuffled.length);
+    setAnswer('');
+    setFeedback(null);
+  };
+
+  const reshuffle = () => {
+    setShuffled([...items].sort(() => Math.random() - 0.5));
+    setIndex(0);
+    setAnswer('');
+    setFeedback(null);
+  };
+
+  const stats = progress.fillBlanksStats || { correct: 0, wrong: 0 };
+  const total = stats.correct + stats.wrong;
+  const pct = total > 0 ? Math.round((stats.correct / total) * 100) : 0;
+
+  return (
+    <div className="glass rounded-2xl p-6 max-w-3xl">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-medium">Fill in the Blank</h3>
+        <div className="text-xs text-white/50">{stats.correct}/{total} correct ({pct}%)</div>
+      </div>
+
+      <div className="text-xs uppercase tracking-widest text-white/40 mb-2">Question {index + 1} / {shuffled.length}</div>
+      <div className="text-xl mb-5 leading-relaxed" style={{ fontFamily: 'Georgia, serif' }}>
+        {item.q.split('___').map((part, i, arr) => (
+          <span key={i}>
+            {part}
+            {i < arr.length - 1 && <span className="inline-block px-3 py-1 mx-1 bg-white/10 rounded border-b-2" style={{ borderColor: theme.primary, minWidth: '120px' }}>____</span>}
+          </span>
+        ))}
+      </div>
+
+      <input
+        value={answer}
+        onChange={e => setAnswer(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && (feedback ? next() : check())}
+        placeholder="Type the missing word..."
+        className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 outline-none focus:border-white/40 text-lg text-white"
+        autoFocus
+      />
+
+      {feedback && (
+        <div className={`mt-4 p-3 rounded-lg ${feedback.startsWith('✓') ? 'bg-emerald-500/15 border border-emerald-300/30' : 'bg-red-500/15 border border-red-300/30'}`}>
+          {feedback}
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-5">
+        <button onClick={check} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-medium">Check</button>
+        <button onClick={next} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15">Next →</button>
+        <button onClick={reshuffle} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 ml-auto"><Shuffle className="w-4 h-4" /></button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PARAGRAPH PRACTICE — with real AI feedback
+// ============================================================
+function ParagraphPracticeView({ vocab }) {
+  const [text, setText] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const used = vocab.filter(v => new RegExp('\\b' + v.word + '\\b', 'i').test(text)).map(v => v.word);
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+
+  const localRubric = () => {
+    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 5);
+    const score = Math.min(10, Math.max(3,
+      3
+      + Math.min(3, used.length)
+      + (wordCount > 100 ? 2 : wordCount > 50 ? 1 : 0)
+      + (sentences.length >= 4 ? 1 : 0)
+      + (/[.!?]\s+[A-Z]/.test(text) ? 1 : 0)
+    ));
+    return `**Local Rubric Estimate: ${score}/10**
+
+**Vocabulary (out of 4):**
+${used.length === 0 ? '✗ No target vocab used yet. Aim for 4-6.' : `✓ Used ${used.length} target word${used.length === 1 ? '' : 's'}: ${used.join(', ')}.`}
+
+**Structure (out of 3):**
+${sentences.length} sentence${sentences.length === 1 ? '' : 's'} detected. ${sentences.length >= 4 ? '✓ Good length.' : 'Aim for at least 4-5 full sentences.'}
+
+**Grammar/Conventions (out of 3):**
+${/[.!?]\s+[A-Z]/.test(text) ? '✓ Sentence boundaries look good.' : 'Check capitalization and end punctuation.'}
+
+**Tips:**
+- Strong topic sentence first
+- Use varied sentence openers (not all "I" or "The")
+- End with a thought-provoking conclusion (not a simple repeat)
+- Proofread for missing words or wrong tense
+
+(Note: This is a backup local check — for real AI feedback, the artifact needs API access.)`;
+  };
+
+  const getFeedback = async () => {
+    setLoading(true);
+    setError('');
+    setFeedback('');
+
+    const prompt = `You are a Grade 8 Humanities teacher. Grade this paragraph out of 10 and give brief specific feedback in this exact format:
+
+**Grade: X/10**
+
+**Vocabulary use:** [1-2 sentences about which target vocab words were used and how well]
+
+**Structure:** [1-2 sentences on topic sentence, supporting details, and conclusion]
+
+**Grammar & conventions:** [1-2 sentences on punctuation, capitalization, sentence variety]
+
+**Ideas & voice:** [1-2 sentences on creativity and clarity]
+
+**One thing to fix first:** [the single most impactful improvement]
+
+Target vocabulary the student is practicing: ${vocab.slice(0, 80).map(v => v.word).join(', ')}
+Words they actually used: ${used.length ? used.join(', ') : 'none'}
+
+Their paragraph:
+"""
+${text}
+"""`;
+
+    // Try window.claude.complete first (artifact-native API)
+    try {
+      if (window.claude && typeof window.claude.complete === 'function') {
+        const result = await window.claude.complete(prompt);
+        setFeedback(result);
+        setLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.log('window.claude.complete failed, trying fetch...', e);
+    }
+
+    // Fall back to direct API call
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      if (!response.ok) throw new Error('API responded ' + response.status);
+      const data = await response.json();
+      const text = data.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n');
+      setFeedback(text || 'No feedback returned. Try again.');
+    } catch (e) {
+      console.error('API call failed:', e);
+      setError('AI service unavailable — showing local rubric instead.');
+      setFeedback(localRubric());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6 max-w-4xl">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-lg font-medium">Paragraph / Story Practice</h3>
+        <div className="flex gap-3 text-xs text-white/60">
+          <span>Words: <strong className="text-white">{wordCount}</strong></span>
+          <span>Vocab used: <strong className="text-white">{used.length}</strong></span>
+        </div>
+      </div>
+
+      <div className="text-xs text-white/50 mb-3">
+        Write 8-12 sentences using as many of the 80 target vocab words as you can. Then get AI feedback on grammar, vocabulary, structure, and ideas.
+      </div>
+
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Write your paragraph or short story here. Try to weave in target vocab naturally..."
+        className="w-full min-h-[280px] bg-white/10 border border-white/20 rounded-xl p-4 outline-none focus:border-white/40 text-white leading-relaxed"
+      />
+
+      <div className="flex gap-2 mt-4 flex-wrap">
+        <button
+          disabled={!text.trim() || loading || wordCount < 20}
+          onClick={getFeedback}
+          className="px-4 py-2 rounded-lg bg-blue-500 hover:bg-blue-400 disabled:opacity-40 text-white font-medium"
+        >
+          {loading ? 'Reading...' : 'Get AI Feedback'}
+        </button>
+        <button onClick={() => { setText(''); setFeedback(''); setError(''); }} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15">Clear</button>
+        {wordCount < 20 && <div className="text-xs text-white/50 self-center">Write at least 20 words to enable feedback.</div>}
+      </div>
+
+      {used.length > 0 && (
+        <div className="mt-4 text-xs text-white/70">
+          <span className="text-white/50">Vocab used: </span>
+          {used.map(w => <span key={w} className="inline-block px-2 py-0.5 rounded bg-amber-300/20 text-amber-200 mr-1 mb-1">{w}</span>)}
+        </div>
+      )}
+
+      {error && <div className="mt-4 text-xs text-amber-300">{error}</div>}
+
+      {feedback && (
+        <div className="mt-4 bg-black/25 rounded-xl p-4 text-sm leading-relaxed whitespace-pre-wrap font-light">
+          {feedback}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// FRENCH DRILL VIEW — flexible drill component
+// ============================================================
+function FrenchDrillView({ drills, title, subtitle, theme }) {
+  const [idx, setIdx] = useState(0);
+  const [answer, setAnswer] = useState('');
+  const [result, setResult] = useState('');
+  const [stats, setStats] = useState({ correct: 0, wrong: 0 });
+  const [shuffled, setShuffled] = useState(() => [...drills].sort(() => Math.random() - 0.5));
+
+  // Reset when drill set changes
+  useEffect(() => {
+    setShuffled([...drills].sort(() => Math.random() - 0.5));
+    setIdx(0);
+    setAnswer('');
+    setResult('');
+    setStats({ correct: 0, wrong: 0 });
+  }, [drills]);
+
+  const item = shuffled[idx % shuffled.length];
+
+  // Strip accents and normalize for forgiving comparison
+  const norm = s => (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[(),.?!\-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Strict version that keeps accents (for accent practice)
+  const normStrict = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+  const check = () => {
+    if (result) return; // already checked
+    const isAccent = title.includes('Accent');
+    const correct = isAccent
+      ? normStrict(answer) === normStrict(item.answer)
+      : norm(answer) === norm(item.answer);
+    setResult(correct ? '✓ Correct!' : `✗ Answer: ${item.answer}`);
+    setStats(s => ({ correct: s.correct + (correct ? 1 : 0), wrong: s.wrong + (correct ? 0 : 1) }));
+  };
+
+  const next = () => {
+    setIdx(i => (i + 1) % shuffled.length);
+    setAnswer('');
+    setResult('');
+  };
+
+  const reshuffle = () => {
+    setShuffled([...drills].sort(() => Math.random() - 0.5));
+    setIdx(0);
+    setAnswer('');
+    setResult('');
+  };
+
+  const insertAccent = (char) => {
+    setAnswer(a => a + char);
+  };
+
+  const total = stats.correct + stats.wrong;
+  const pct = total > 0 ? Math.round((stats.correct / total) * 100) : 0;
+
+  return (
+    <div className="glass rounded-2xl p-6 max-w-3xl">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h3 className="text-lg font-medium">{title}</h3>
+        <div className="text-xs text-white/60">Session: <strong className="text-white">{stats.correct}/{total}</strong> ({pct}%)</div>
+      </div>
+      <div className="text-xs text-white/50 mb-5">{subtitle}</div>
+
+      <div className="text-xs uppercase tracking-widest text-white/40 mb-2">Item {idx + 1} / {shuffled.length}</div>
+      <div className="text-xl md:text-2xl mb-5 leading-relaxed" style={{ color: theme.primary, fontFamily: 'Georgia, serif' }}>{item.prompt}</div>
+
+      <input
+        value={answer}
+        onChange={e => setAnswer(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && (result ? next() : check())}
+        placeholder="Tape ta réponse..."
+        className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 outline-none focus:border-white/40 text-lg text-white"
+        autoFocus
+      />
+
+      {/* Accent quick buttons */}
+      <div className="flex flex-wrap gap-1 mt-2">
+        {['é', 'è', 'ê', 'ë', 'à', 'â', 'î', 'ï', 'ô', 'ö', 'ù', 'û', 'ç'].map(c => (
+          <button
+            key={c}
+            onClick={() => insertAccent(c)}
+            className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-sm font-mono"
+            type="button"
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
+      {result && (
+        <div className={`mt-4 p-3 rounded-lg ${result.startsWith('✓') ? 'bg-emerald-500/15 border border-emerald-300/30' : 'bg-red-500/15 border border-red-300/30'}`}>
+          {result}
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-5">
+        <button onClick={check} disabled={!!result} className="px-4 py-2 rounded-lg disabled:opacity-50" style={{ background: theme.primary, color: 'white' }}>Check</button>
+        <button onClick={next} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15">Next →</button>
+        <button onClick={reshuffle} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 ml-auto" title="Shuffle"><Shuffle className="w-4 h-4" /></button>
+      </div>
+
+      <div className="text-xs text-white/40 mt-4 italic">
+        💡 Tip: Accents are forgiving for most drills (é matches e). For accent typing, exact accents required.
+      </div>
+    </div>
+  );
+}
+
+// Backwards-compat alias (in case anything still references FrenchDrillsView)
+function FrenchDrillsView(props) {
+  return <FrenchDrillView drills={FRENCH_CONJUGATION_DRILLS_FULL} title="Conjugation Drills" subtitle="All ER, IR, RE and irregular verbs." {...props} />;
+}
+
+function CountdownIntro({ examDates, masterSound, onDone }) {
+  const exams = Object.entries(examDates)
+    .map(([subject, date]) => ({ subject, date: new Date(date) }))
+    .filter(e => e.date.getTime() > Date.now())
+    .sort((a, b) => a.date - b.date);
+  const next = exams[0];
+  const days = next ? Math.ceil((next.date.getTime() - Date.now()) / 86400000) : 0;
+
+  // Tiers escalate as exam approaches
+  const tier = days < 3 ? 'full'
+    : days <= 7 ? 'explosive'
+    : days <= 14 ? 'flames'
+    : days <= 30 ? 'particles'
+    : 'simple';
+
+  const duration = tier === 'full' ? 7500
+    : tier === 'explosive' ? 4500
+    : tier === 'flames' ? 3300
+    : tier === 'particles' ? 2600
+    : 1800;
+
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    const id = setTimeout(onDone, duration);
+    return () => clearTimeout(id);
+  }, [duration, onDone]);
+
+  // Multi-stage progression for "full" tier
+  useEffect(() => {
+    if (tier !== 'full') return;
+    const t1 = setTimeout(() => setStage(1), 2200);
+    const t2 = setTimeout(() => setStage(2), 4400);
+    const t3 = setTimeout(() => setStage(3), 6000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [tier]);
+
+  // Synth music sting
+  useEffect(() => {
+    if (!masterSound || !['full', 'explosive', 'flames'].includes(tier)) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+
+      // Sub bass hit
+      const bass = ctx.createOscillator();
+      const bassGain = ctx.createGain();
+      bass.type = 'sawtooth';
+      bass.frequency.setValueAtTime(60, ctx.currentTime);
+      bass.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + 0.6);
+      bassGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      bassGain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.05);
+      bassGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.5);
+      bass.connect(bassGain).connect(ctx.destination);
+      bass.start();
+      bass.stop(ctx.currentTime + 1.6);
+
+      // High shimmer for full tier
+      if (tier === 'full') {
+        setTimeout(() => {
+          try {
+            const high = ctx.createOscillator();
+            const highGain = ctx.createGain();
+            high.type = 'sine';
+            high.frequency.setValueAtTime(880, ctx.currentTime);
+            high.frequency.linearRampToValueAtTime(1760, ctx.currentTime + 1.5);
+            highGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+            highGain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.3);
+            highGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.6);
+            high.connect(highGain).connect(ctx.destination);
+            high.start();
+            high.stop(ctx.currentTime + 1.7);
+          } catch (e) {}
+        }, 4000);
+
+        // Final boom
+        setTimeout(() => {
+          try {
+            const boom = ctx.createOscillator();
+            const boomGain = ctx.createGain();
+            boom.type = 'sawtooth';
+            boom.frequency.setValueAtTime(40, ctx.currentTime);
+            boomGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+            boomGain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.02);
+            boomGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.9);
+            boom.connect(boomGain).connect(ctx.destination);
+            boom.start();
+            boom.stop(ctx.currentTime + 1.0);
+          } catch (e) {}
+        }, 5800);
+      }
+    } catch (e) {}
+  }, [masterSound, tier]);
+
+  const subjectName = next
+    ? next.subject.charAt(0).toUpperCase() + next.subject.slice(1)
+    : 'Exams';
+
+  return (
+    <div className={`fixed inset-0 z-50 flex items-center justify-center overflow-hidden countdown-intro ${tier}`}>
+      <div className="absolute inset-0" style={{ background: tier === 'full' || tier === 'explosive' ? 'radial-gradient(ellipse at center, rgba(80,20,20,0.95), rgba(2,4,12,0.98))' : 'rgba(2,6,20,0.95)' }} />
+
+      {/* Particles for all non-simple tiers */}
+      {tier !== 'simple' && Array.from({ length: tier === 'full' ? 100 : tier === 'explosive' ? 60 : 35 }).map((_, i) => (
+        <span
+          key={i}
+          className="particle"
+          style={{
+            left: `${Math.random() * 100}%`,
+            animationDelay: `${Math.random() * 1.8}s`,
+            animationDuration: `${1 + Math.random() * 2}s`,
+          }}
+        />
+      ))}
+
+      {/* Flames for tier 7-14 days and below */}
+      {['flames','explosive','full'].includes(tier) && <div className="absolute inset-x-0 bottom-0 flame-field" />}
+
+      {/* Blast rings for explosive and full */}
+      {['explosive','full'].includes(tier) && (
+        <>
+          <div className="absolute inset-0 flex items-center justify-center"><div className="blast-ring" /></div>
+          <div className="absolute inset-0 flex items-center justify-center"><div className="blast-ring delay-2" /></div>
+        </>
+      )}
+
+      <button onClick={onDone} className="absolute top-5 right-5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/25 text-sm z-50 border border-white/20">
+        Skip →
+      </button>
+
+      <div className="relative z-10 text-center px-6 trailer-copy">
+        {tier === 'full' ? (
+          <>
+            {stage === 0 && (
+              <div className="cinematic-stage">
+                <div className="text-xs tracking-[0.6em] text-red-300/80 mb-6">THE FINAL COUNTDOWN</div>
+                <div className="trailer-line">ALL YOUR WORK</div>
+                <div className="trailer-line">IS UP FOR THIS</div>
+              </div>
+            )}
+            {stage === 1 && (
+              <div className="cinematic-stage">
+                <div className="text-xs tracking-[0.6em] text-amber-300/80 mb-4">{subjectName.toUpperCase()} — IT'S ALMOST HERE</div>
+                <div className="trailer-days">{days}</div>
+                <div className="text-3xl md:text-5xl font-light tracking-widest text-amber-200" style={{ fontFamily: 'Georgia, serif' }}>
+                  {days === 1 ? 'DAY REMAINS' : days === 0 ? 'TODAY' : 'DAYS REMAIN'}
+                </div>
+              </div>
+            )}
+            {stage === 2 && (
+              <div className="cinematic-stage">
+                <div className="trailer-line text-amber-300">ARE YOU READY?</div>
+              </div>
+            )}
+            {stage === 3 && (
+              <div className="cinematic-stage">
+                <div className="text-xs tracking-[0.6em] text-emerald-300/80 mb-4">YOU'VE PUT IN THE WORK</div>
+                <div className="trailer-line text-emerald-300">GO GET IT.</div>
+              </div>
+            )}
+          </>
+        ) : tier === 'explosive' ? (
+          <>
+            <div className="text-xs tracking-[0.5em] text-red-300/80 mb-4">{subjectName.toUpperCase()} — INTENSIFYING</div>
+            <div className="text-8xl md:text-9xl font-black tabular-nums mb-3" style={{ color: '#fbbf24', textShadow: '0 0 30px rgba(251,191,36,0.6)' }}>{days}</div>
+            <div className="text-2xl md:text-3xl font-light text-amber-100" style={{ fontFamily: 'Georgia, serif' }}>days until exam</div>
+            <div className="text-sm text-amber-200/70 mt-4 italic">Lock in. The window is closing.</div>
+          </>
+        ) : tier === 'flames' ? (
+          <>
+            <div className="text-xs tracking-[0.4em] text-orange-300/80 mb-4">{subjectName.toUpperCase()} APPROACHES</div>
+            <div className="text-8xl md:text-9xl font-bold tabular-nums mb-3" style={{ color: '#fb923c' }}>{days}</div>
+            <div className="text-2xl md:text-3xl font-light" style={{ fontFamily: 'Georgia, serif' }}>days to go</div>
+          </>
+        ) : tier === 'particles' ? (
+          <>
+            <div className="text-xs tracking-[0.4em] text-blue-200/70 mb-4">{subjectName.toUpperCase()} EXAM</div>
+            <div className="text-7xl md:text-8xl font-bold tabular-nums mb-3 text-blue-100">{days}</div>
+            <div className="text-xl md:text-2xl font-light text-blue-200/80" style={{ fontFamily: 'Georgia, serif' }}>days remain</div>
+          </>
+        ) : (
+          <>
+            <div className="text-xs tracking-[0.4em] text-blue-200/70 mb-3">NEXT EXAM: {subjectName.toUpperCase()}</div>
+            <div className="text-6xl font-light tabular-nums mb-2 text-white/90">{days}</div>
+            <div className="text-lg font-light text-white/60" style={{ fontFamily: 'Georgia, serif' }}>days from now</div>
+          </>
+        )}
+      </div>
+
+      <style>{`
+        .countdown-intro.explosive { animation: screenShake .28s ease-in-out 7; }
+        .countdown-intro.full { animation: screenShake .35s ease-in-out 12; }
+        .particle {
+          position: absolute; bottom: -20px;
+          width: 3px; height: 3px; border-radius: 999px;
+          background: rgba(251, 191, 36, 0.7);
+          animation: particleRise linear infinite;
+          box-shadow: 0 0 6px currentColor;
+        }
+        .countdown-intro.particles .particle { background: rgba(147, 197, 253, .75); }
+        .flame-field {
+          height: 45vh;
+          background:
+            radial-gradient(circle at 15% 100%, rgba(251,146,60,.7), transparent 30%),
+            radial-gradient(circle at 50% 100%, rgba(239,68,68,.6), transparent 35%),
+            radial-gradient(circle at 80% 100%, rgba(251,146,60,.7), transparent 30%);
+          filter: blur(10px);
+          animation: flameFlicker .15s infinite alternate;
+        }
+        .blast-ring {
+          border: 3px solid rgba(251, 191, 36, 0.5);
+          border-radius: 999px;
+          width: 30vmin; height: 30vmin;
+          animation: blast 1.6s ease-out infinite;
+        }
+        .blast-ring.delay-2 { animation-delay: 0.6s; border-color: rgba(239, 68, 68, 0.4); }
+        .cinematic-stage { animation: stageReveal 0.7s ease-out forwards; }
+        .trailer-copy { animation: introPop 1.4s ease forwards; }
+        .trailer-line {
+          font-size: clamp(1.8rem, 5.5vw, 5.2rem);
+          font-weight: 900;
+          letter-spacing: .06em;
+          line-height: 1.1;
+          text-shadow: 0 0 25px rgba(255,255,255,0.2);
+        }
+        .trailer-days {
+          font-size: clamp(5rem, 18vw, 16rem);
+          font-weight: 900;
+          color: #fbbf24;
+          text-shadow: 0 0 40px rgba(251,191,36,.7), 0 0 80px rgba(251,191,36,.3);
+          line-height: 1;
+          margin: .15em 0;
+          font-variant-numeric: tabular-nums;
+        }
+        @keyframes introPop {
+          from { opacity: 0; transform: scale(.92) translateY(12px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes stageReveal {
+          from { opacity: 0; transform: scale(.95); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes particleRise {
+          to { transform: translateY(-110vh); opacity: 0; }
+        }
+        @keyframes flameFlicker {
+          from { opacity: .65; transform: scaleY(.96); }
+          to { opacity: 1; transform: scaleY(1.05); }
+        }
+        @keyframes blast {
+          from { transform: scale(.2); opacity: .8; }
+          to { transform: scale(4); opacity: 0; }
+        }
+        @keyframes screenShake {
+          0%,100% { transform: translate(0); }
+          25% { transform: translate(5px, -4px); }
+          50% { transform: translate(-4px, 5px); }
+          75% { transform: translate(4px, 4px); }
+        }
+      `}</style>
+    </div>
+  );
+}
+// ============================================================
+// MATH FORMULAS VIEW
+// ============================================================
+function FormulasView({ formulas }) {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-white/60 mb-2">All formulas you need for the Grade 8 Math exam. Tap to copy.</div>
+      {formulas.map((f, i) => (
+        <div key={i} className="glass rounded-xl p-4 hover:bg-white/10 cursor-pointer" onClick={() => navigator.clipboard?.writeText(f.formula)}>
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="font-medium">{f.name}</div>
+            <div className="text-blue-300 font-mono text-sm">{f.formula}</div>
+          </div>
+          {f.note && <div className="text-xs text-white/50 mt-1">{f.note}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// MATH PROBLEM GENERATOR
+// ============================================================
+function ProblemGenerator() {
+  const [problem, setProblem] = useState(null);
+  const [showSolution, setShowSolution] = useState(false);
+  const [stats, setStats] = useState({ correct: 0, total: 0 });
+  const [userAnswer, setUserAnswer] = useState('');
+  const [feedback, setFeedback] = useState(null);
+
+  const types = [
+    () => {
+      // Slope from two points
+      const x1 = randInt(-9, 9), y1 = randInt(-9, 9);
+      let x2 = randInt(-9, 9), y2 = randInt(-9, 9);
+      while (x2 === x1) x2 = randInt(-9, 9);
+      const slope = (y2 - y1) / (x2 - x1);
+      return {
+        type: 'Slope',
+        question: `Find the slope of the line passing through (${x1}, ${y1}) and (${x2}, ${y2}).`,
+        answer: slope,
+        unit: '',
+        solution: `Slope = (yâ‚‚ - yâ‚) / (xâ‚‚ - xâ‚) = (${y2} - (${y1})) / (${x2} - (${x1})) = ${y2 - y1} / ${x2 - x1} = ${Number(slope.toFixed(4))}`
+      };
+    },
+    () => {
+      // Pythagorean - find hypotenuse
+      const a = randInt(3, 20), b = randInt(3, 20);
+      const c = Math.sqrt(a*a + b*b);
+      return {
+        type: 'Pythagorean Theorem',
+        question: `A right triangle has legs of ${a} cm and ${b} cm. Find the hypotenuse (round to 1 decimal).`,
+        answer: Number(c.toFixed(1)),
+        unit: 'cm',
+        solution: `cÂ² = aÂ² + bÂ²\ncÂ² = ${a}Â² + ${b}Â² = ${a*a} + ${b*b} = ${a*a + b*b}\nc = âˆš${a*a + b*b} â‰ˆ ${c.toFixed(1)} cm`
+      };
+    },
+    () => {
+      // Pythagorean - find a leg
+      const a = randInt(3, 15);
+      const c = a + randInt(2, 10);
+      const b = Math.sqrt(c*c - a*a);
+      return {
+        type: 'Pythagorean Theorem',
+        question: `A right triangle has hypotenuse ${c} m and one leg ${a} m. Find the other leg (round to 1 decimal).`,
+        answer: Number(b.toFixed(1)),
+        unit: 'm',
+        solution: `aÂ² + bÂ² = cÂ²\nbÂ² = cÂ² - aÂ² = ${c*c} - ${a*a} = ${c*c - a*a}\nb = âˆš${c*c - a*a} â‰ˆ ${b.toFixed(1)} m`
+      };
+    },
+    () => {
+      // Volume of cone
+      const r = randInt(2, 10);
+      const h = randInt(5, 20);
+      const v = (1/3) * Math.PI * r * r * h;
+      return {
+        type: 'Volume of cone',
+        question: `Find the volume of a cone with radius ${r} cm and height ${h} cm. (Use Ï€ â‰ˆ 3.14, round to 1 decimal)`,
+        answer: Number(v.toFixed(1)),
+        unit: 'cmÂ³',
+        solution: `V = (1/3) Ã— Ï€ Ã— rÂ² Ã— h\nV = (1/3) Ã— 3.14 Ã— ${r}Â² Ã— ${h}\nV = (1/3) Ã— 3.14 Ã— ${r*r} Ã— ${h}\nV â‰ˆ ${v.toFixed(1)} cmÂ³`
+      };
+    },
+    () => {
+      // Volume of sphere
+      const r = randInt(3, 12);
+      const v = (4/3) * Math.PI * r * r * r;
+      return {
+        type: 'Volume of sphere',
+        question: `Find the volume of a sphere with radius ${r} cm. (Use Ï€ â‰ˆ 3.14, round to whole number)`,
+        answer: Math.round(v),
+        unit: 'cmÂ³',
+        solution: `V = (4/3) Ã— Ï€ Ã— rÂ³\nV = (4/3) Ã— 3.14 Ã— ${r}Â³\nV = (4/3) Ã— 3.14 Ã— ${r*r*r}\nV â‰ˆ ${Math.round(v)} cmÂ³`
+      };
+    },
+    () => {
+      // Sum of interior angles
+      const n = randInt(3, 12);
+      const sum = (n - 2) * 180;
+      return {
+        type: 'Sum of interior angles',
+        question: `What is the sum of the interior angles of a ${n}-sided polygon?`,
+        answer: sum,
+        unit: 'Â°',
+        solution: `Sum = (n - 2) Ã— 180Â°\nSum = (${n} - 2) Ã— 180Â°\nSum = ${n - 2} Ã— 180Â° = ${sum}Â°`
+      };
+    },
+    () => {
+      // Single exterior angle
+      const n = randInt(3, 12);
+      const ext = 360 / n;
+      return {
+        type: 'Exterior angle (regular polygon)',
+        question: `What is the measure of one exterior angle of a regular ${n}-gon? (round to 2 decimals)`,
+        answer: Number(ext.toFixed(2)),
+        unit: 'Â°',
+        solution: `Each exterior angle = 360Â° / n\n= 360Â° / ${n}\n= ${ext.toFixed(2)}Â°`
+      };
+    },
+    () => {
+      // y = mx + b: find y given x
+      const m = randInt(-5, 5) || 2;
+      const b = randInt(-10, 10);
+      const x = randInt(-8, 8);
+      const y = m * x + b;
+      return {
+        type: 'Linear equation',
+        question: `For the equation y = ${m}x ${b >= 0 ? '+' : '-'} ${Math.abs(b)}, find y when x = ${x}.`,
+        answer: y,
+        unit: '',
+        solution: `y = ${m}x ${b >= 0 ? '+' : '-'} ${Math.abs(b)}\ny = ${m}(${x}) ${b >= 0 ? '+' : '-'} ${Math.abs(b)}\ny = ${m*x} ${b >= 0 ? '+' : '-'} ${Math.abs(b)}\ny = ${y}`
+      };
+    },
+  ];
+
+  function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+  const generate = () => {
+    const fn = types[Math.floor(Math.random() * types.length)];
+    setProblem(fn());
+    setShowSolution(false);
+    setUserAnswer('');
+    setFeedback(null);
+  };
+
+  useEffect(() => { generate(); }, []);
+
+  const checkAnswer = () => {
+    if (!problem || !userAnswer.trim()) return;
+    const userVal = parseFloat(userAnswer);
+    const tolerance = Math.abs(problem.answer) * 0.02 + 0.05;
+    const correct = Math.abs(userVal - problem.answer) < tolerance;
+    setFeedback(correct ? 'correct' : 'incorrect');
+    setStats(s => ({ correct: s.correct + (correct ? 1 : 0), total: s.total + 1 }));
+    setShowSolution(true);
+  };
+
+  if (!problem) return <div>Loading...</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="glass rounded-2xl p-5 flex items-center justify-between">
+        <div>
+          <div className="text-sm text-white/60">Random Problem Generator</div>
+          <div className="text-xs text-blue-300">{problem.type}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-white/60">Score</div>
+          <div className="text-lg font-bold">{stats.correct} / {stats.total}</div>
+        </div>
+      </div>
+
+      <div className="glass rounded-2xl p-6">
+        <div className="text-lg mb-4">{problem.question}</div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={userAnswer}
+            onChange={(e) => setUserAnswer(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && checkAnswer()}
+            placeholder="Your answer"
+            disabled={feedback}
+            className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-300"
+          />
+          <span className="self-center text-white/60">{problem.unit}</span>
+          <button onClick={checkAnswer} disabled={feedback} className="px-6 py-3 rounded-lg bg-blue-500 hover:bg-blue-400 font-medium disabled:opacity-40">
+            Check
+          </button>
+        </div>
+        {feedback === 'correct' && <div className="mt-3 text-emerald-400 flex items-center gap-2"><Check className="w-5 h-5" /> Correct!</div>}
+        {feedback === 'incorrect' && <div className="mt-3 text-red-400 flex items-center gap-2"><X className="w-5 h-5" /> Not quite. The answer was {problem.answer}{problem.unit}.</div>}
+      </div>
+
+      {showSolution && (
+        <div className="glass rounded-2xl p-5">
+          <div className="text-sm text-white/60 mb-2">Step-by-step solution:</div>
+          <pre className="text-sm whitespace-pre-wrap font-mono text-blue-200">{problem.solution}</pre>
+        </div>
+      )}
+
+      <button onClick={generate} className="w-full py-3 rounded-xl bg-blue-500 hover:bg-blue-400 font-medium">
+        New Problem
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
+// SCIENCE DIAGRAM LABELING (cell diagram)
+// ============================================================
+function DiagramLabel() {
+  const [mode, setMode] = useState('plant'); // plant or animal
+  const [labels, setLabels] = useState({});
+  const [submitted, setSubmitted] = useState(false);
+  const [score, setScore] = useState(0);
+
+  const plantParts = [
+    { id: 'A', name: 'Vacuole', x: 55, y: 50 },
+    { id: 'B', name: 'Cell wall', x: 78, y: 75 },
+    { id: 'C', name: 'Cell membrane', x: 55, y: 88 },
+    { id: 'D', name: 'Nucleus', x: 30, y: 70 },
+    { id: 'E', name: 'Mitochondrion', x: 18, y: 50 },
+    { id: 'F', name: 'Chloroplast', x: 25, y: 25 },
+    { id: 'G', name: 'Golgi apparatus', x: 50, y: 30 },
+  ];
+  const animalParts = [
+    { id: '1', name: 'Cell membrane', x: 25, y: 30 },
+    { id: '2', name: 'Nucleus', x: 50, y: 35 },
+    { id: '3', name: 'Cytoplasm', x: 70, y: 35 },
+    { id: '4', name: 'Mitochondrion', x: 75, y: 50 },
+    { id: '5', name: 'Vacuole', x: 75, y: 70 },
+  ];
+
+  const parts = mode === 'plant' ? plantParts : animalParts;
+  const allOptions = [...new Set([...plantParts.map(p=>p.name), ...animalParts.map(p=>p.name)])];
+
+  const submit = () => {
+    let correct = 0;
+    parts.forEach(p => { if (labels[p.id] === p.name) correct++; });
+    setScore(correct);
+    setSubmitted(true);
+  };
+
+  const reset = () => { setLabels({}); setSubmitted(false); setScore(0); };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <button onClick={() => { setMode('plant'); reset(); }} className={`px-4 py-2 rounded-lg ${mode === 'plant' ? 'bg-emerald-500/30 border border-emerald-400' : 'bg-white/5'}`}>Plant Cell</button>
+        <button onClick={() => { setMode('animal'); reset(); }} className={`px-4 py-2 rounded-lg ${mode === 'animal' ? 'bg-pink-500/30 border border-pink-400' : 'bg-white/5'}`}>Animal Cell</button>
+      </div>
+
+      <div className="glass rounded-2xl p-5">
+        <div className="relative w-full aspect-square max-w-md mx-auto mb-4 rounded-2xl overflow-hidden" style={{
+          background: mode === 'plant'
+            ? 'radial-gradient(circle at center, rgba(74, 222, 128, 0.2), rgba(34, 100, 50, 0.4))'
+            : 'radial-gradient(circle at center, rgba(244, 114, 182, 0.2), rgba(150, 50, 100, 0.4))',
+          border: mode === 'plant' ? '4px solid rgba(74, 222, 128, 0.5)' : '2px solid rgba(244, 114, 182, 0.5)',
+        }}>
+          {/* nucleus */}
+          <div className="absolute rounded-full bg-purple-300/40 border-2 border-purple-300" style={{ left: mode==='plant' ? '20%' : '40%', top: mode==='plant' ? '60%' : '25%', width: '20%', height: '20%' }} />
+          {/* labels */}
+          {parts.map(p => (
+            <div
+              key={p.id}
+              className="absolute -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-amber-400 text-amber-900 font-bold flex items-center justify-center text-sm border-2 border-amber-200 shadow-lg"
+              style={{ left: `${p.x}%`, top: `${p.y}%` }}
+            >
+              {p.id}
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-2">
+          {parts.map(p => {
+            const isCorrect = submitted && labels[p.id] === p.name;
+            const isWrong = submitted && labels[p.id] && labels[p.id] !== p.name;
+            return (
+              <div key={p.id} className={`flex items-center gap-2 p-2 rounded-lg ${isCorrect ? 'bg-emerald-500/20' : isWrong ? 'bg-red-500/20' : 'bg-white/5'}`}>
+                <div className="w-8 h-8 rounded-full bg-amber-400 text-amber-900 font-bold flex items-center justify-center text-sm">{p.id}</div>
+                <select
+                  disabled={submitted}
+                  value={labels[p.id] || ''}
+                  onChange={(e) => setLabels({...labels, [p.id]: e.target.value})}
+                  className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white"
+                >
+                  <option value="">â€” Select â€”</option>
+                  {allOptions.map(o => <option key={o} value={o} className="bg-slate-800">{o}</option>)}
+                </select>
+                {submitted && isCorrect && <Check className="w-5 h-5 text-emerald-400" />}
+                {submitted && isWrong && <span className="text-xs text-red-300">â†’ {p.name}</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {!submitted ? (
+        <button onClick={submit} disabled={Object.keys(labels).length < parts.length} className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-medium disabled:opacity-40">
+          Submit Labels
+        </button>
+      ) : (
+        <div className="glass rounded-2xl p-5 text-center">
+          <div className="text-2xl font-bold text-emerald-400">{score} / {parts.length} correct</div>
+          <button onClick={reset} className="mt-3 px-6 py-2 rounded-lg bg-white/10 hover:bg-white/20">Try Again</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ============================================================
+// VIDEOS VIEW
+// ============================================================
+function VideosView({ subject }) {
+  const [videos, setVideos] = useState([]);
+
+  useEffect(() => {
+    storage.get(`videos_${subject}`, true).then(v => setVideos(v || []));
+  }, [subject]);
+
+  if (videos.length === 0) {
+    return (
+      <div className="glass rounded-2xl p-12 text-center text-white/60">
+        <Youtube className="w-12 h-12 mx-auto mb-3 opacity-40" />
+        <div className="italic">No videos added yet.</div>
+        <div className="text-sm mt-2">The admin can add YouTube links from the Admin Panel.</div>
+      </div>
+    );
+  }
+
+  const getEmbedUrl = (url) => {
+    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/);
+    return match ? `https://www.youtube.com/embed/${match[1]}` : null;
+  };
+
+  return (
+    <div className="space-y-4">
+      {videos.map((v, i) => {
+        const embed = getEmbedUrl(v.url);
+        return (
+          <div key={i} className="glass rounded-2xl p-4">
+            {v.title && <div className="font-medium mb-3">{v.title}</div>}
+            {embed ? (
+              <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+                <iframe
+                  src={embed}
+                  className="absolute inset-0 w-full h-full rounded-lg"
+                  frameBorder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              </div>
+            ) : (
+              <div className="text-white/50">Invalid YouTube URL: {v.url}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// NOTES VIEW (per-user notes)
+// ============================================================
+function NotesView({ subject, username }) {
+  const [notes, setNotes] = useState('');
+  const [saved, setSaved] = useState(true);
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    storage.get(`notes_${username}_${subject}`).then(n => { if (n) setNotes(n); });
+  }, [subject, username]);
+
+  const handleChange = (val) => {
+    setNotes(val);
+    setSaved(false);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      await storage.set(`notes_${username}_${subject}`, val);
+      setSaved(true);
+    }, 800);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between text-sm text-white/60">
+        <div>Your personal notes for this subject. Auto-saves to your browser.</div>
+        <div className={saved ? 'text-emerald-400' : 'text-amber-300'}>
+          {saved ? 'âœ“ Saved' : 'Saving...'}
+        </div>
+      </div>
+      <textarea
+        value={notes}
+        onChange={(e) => handleChange(e.target.value)}
+        placeholder="Write your notes here. Things you keep forgetting, key formulas, mnemonics, anything..."
+        className="w-full min-h-[400px] glass rounded-2xl p-5 text-white placeholder-white/30 focus:outline-none focus:border-white/30 resize-y"
+        style={{ fontFamily: 'Georgia, serif', lineHeight: 1.7 }}
+      />
+    </div>
+  );
+}
+
+// ============================================================
+// MUSIC BAR (Spotify-style)
+// ============================================================
+function MusicBar({ musicLibrary, masterSound }) {
+  const [playing, setPlaying] = useState(false);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [volume, setVolume] = useState(0.6);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [shuffle, setShuffle] = useState(false);
+  const [loop, setLoop] = useState(false);
+  const audioRef = useRef(null);
+
+  const current = musicLibrary[currentIdx];
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = masterSound ? volume : 0;
+  }, [volume, masterSound]);
+
+  useEffect(() => {
+    if (!audioRef.current || !current) return;
+    if (playing) audioRef.current.play().catch(()=>{});
+    else audioRef.current.pause();
+  }, [playing, currentIdx]);
+
+  const next = () => {
+    if (musicLibrary.length === 0) return;
+    if (shuffle) {
+      setCurrentIdx(Math.floor(Math.random() * musicLibrary.length));
+    } else {
+      setCurrentIdx((currentIdx + 1) % musicLibrary.length);
+    }
+  };
+
+  const prev = () => {
+    if (musicLibrary.length === 0) return;
+    setCurrentIdx((currentIdx - 1 + musicLibrary.length) % musicLibrary.length);
+  };
+
+  const onTimeUpdate = (e) => {
+    setProgress(e.target.currentTime);
+    setDuration(e.target.duration || 0);
+  };
+
+  const onEnded = () => {
+    if (loop) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play();
+    } else {
+      next();
+    }
+  };
+
+  const seek = (e) => {
+    if (!audioRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    audioRef.current.currentTime = pct * duration;
+  };
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+  };
+
+  if (musicLibrary.length === 0) {
+    return (
+      <div className="fixed bottom-0 left-0 right-0 z-30 glass border-t border-white/10 px-4 py-2">
+        <div className="flex items-center justify-center text-xs text-white/40">
+          <Music className="w-4 h-4 mr-2" /> No music yet â€” admin can upload MP3s in the Admin Panel.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-30 backdrop-blur-xl border-t border-white/10 bg-black/40">
+      <audio
+        ref={audioRef}
+        src={current?.dataUrl}
+        onTimeUpdate={onTimeUpdate}
+        onEnded={onEnded}
+        onLoadedMetadata={(e) => setDuration(e.target.duration)}
+      />
+      <div className="px-4 py-3 max-w-5xl mx-auto">
+        <div className="flex items-center gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium truncate">{current?.title || 'Nothing playing'}</div>
+            <div className="text-xs text-white/40 truncate">{musicLibrary.length} track(s) in library</div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShuffle(!shuffle)} className={`p-2 rounded-lg ${shuffle ? 'text-emerald-400' : 'text-white/60 hover:text-white'}`}><Shuffle className="w-4 h-4" /></button>
+            <button onClick={prev} className="p-2 rounded-lg hover:bg-white/10"><SkipBack className="w-5 h-5" /></button>
+            <button onClick={() => setPlaying(!playing)} className="p-3 rounded-full bg-white text-black hover:bg-white/90">
+              {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+            </button>
+            <button onClick={next} className="p-2 rounded-lg hover:bg-white/10"><SkipForward className="w-5 h-5" /></button>
+            <button onClick={() => setLoop(!loop)} className={`p-2 rounded-lg ${loop ? 'text-emerald-400' : 'text-white/60 hover:text-white'}`}><Repeat className="w-4 h-4" /></button>
+          </div>
+
+          <div className="hidden md:flex items-center gap-2 min-w-[160px]">
+            <Volume2 className="w-4 h-4 text-white/60" />
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => setVolume(parseFloat(e.target.value))}
+              className="flex-1 accent-white"
+            />
+          </div>
+        </div>
+
+        <div className="mt-2 flex items-center gap-2 text-xs text-white/50">
+          <span className="tabular-nums w-10 text-right">{fmt(progress)}</span>
+          <div onClick={seek} className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden cursor-pointer">
+            <div className="h-full bg-white/60" style={{ width: duration ? `${(progress/duration)*100}%` : '0%' }} />
+          </div>
+          <span className="tabular-nums w-10">{fmt(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SETTINGS VIEW
+// ============================================================
+function SettingsView({ bgChoice, setBgChoice, ambience, setAmbience, masterSound, setMasterSound, onBack }) {
+  const backgrounds = [
+    { key: 'rainy-window', label: 'Rainy Window', desc: 'Cozy default' },
+    { key: 'dark-forest', label: 'Dark Rainy Forest', desc: 'Deep immersion' },
+    { key: 'sunset-sky', label: 'Sunset Sky', desc: 'Warm tones' },
+    { key: 'night-city', label: 'Night City', desc: 'Urban glow' },
+    { key: 'minimal-dark', label: 'Minimal Dark', desc: 'No distractions' },
+  ];
+
+  return (
+    <div className="min-h-screen px-4 md:px-8 py-6 fade-in max-w-3xl mx-auto">
+      <header className="flex items-center gap-3 mb-8">
+        <button onClick={onBack} className="p-2 rounded-lg hover:bg-white/10"><ChevronLeft className="w-5 h-5" /></button>
+        <h1 className="text-2xl font-light" style={{ fontFamily: 'Georgia, serif' }}>Settings</h1>
+      </header>
+
+      <div className="space-y-6">
+
+        <div className="glass rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-medium">Sound</h3>
+            <button onClick={() => setMasterSound(!masterSound)} className={`px-3 py-1 rounded-full text-xs ${masterSound ? 'bg-emerald-500/30 text-emerald-200' : 'bg-white/10 text-white/60'}`}>
+              Master {masterSound ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          <div className="space-y-4">
+            {[
+              { key: 'rain', label: 'Rain', icon: Cloud },
+              { key: 'wind', label: 'Wind', icon: Wind },
+              { key: 'fire', label: 'Fireplace', icon: Flame },
+            ].map(({ key, label, icon: AmbIcon }) => (
+              <div key={key}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2 text-sm"><AmbIcon className="w-4 h-4" /> {label}</div>
+                  <span className="text-xs text-white/50">{ambience[key]}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={ambience[key]}
+                  onChange={(e) => setAmbience({ ...ambience, [key]: parseInt(e.target.value) })}
+                  className="w-full accent-blue-300"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="glass rounded-2xl p-5">
+          <h3 className="text-lg font-medium mb-4">Background</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {backgrounds.map(b => (
+              <button
+                key={b.key}
+                onClick={() => setBgChoice(b.key)}
+                className={`p-4 rounded-xl border text-left ${bgChoice === b.key ? 'border-white/40 bg-white/10' : 'border-white/10 hover:border-white/20'}`}
+              >
+                <div className="font-medium">{b.label}</div>
+                <div className="text-xs text-white/50">{b.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ height: '120px' }} />
+    </div>
+  );
+}
+
+
+// ============================================================
+// ADMIN PANEL
+// ============================================================
+function AdminPanel({ examDates, setExamDates, musicLibrary, setMusicLibrary, onBack }) {
+  const [activeTab, setActiveTab] = useState('exams');
+  const [videoSubject, setVideoSubject] = useState('science');
+  const [videos, setVideos] = useState({});
+  const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [newVideoTitle, setNewVideoTitle] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const allVideos = {};
+      for (const s of ['science','math','humanities','french']) {
+        allVideos[s] = (await storage.get(`videos_${s}`, true)) || [];
+      }
+      setVideos(allVideos);
+    })();
+  }, []);
+
+  const addVideo = async () => {
+    if (!newVideoUrl) return;
+    const updated = { ...videos };
+    updated[videoSubject] = [...(updated[videoSubject] || []), { url: newVideoUrl, title: newVideoTitle }];
+    setVideos(updated);
+    await storage.set(`videos_${videoSubject}`, updated[videoSubject], true);
+    setNewVideoUrl(''); setNewVideoTitle('');
+  };
+
+  const removeVideo = async (subject, idx) => {
+    const updated = { ...videos };
+    updated[subject] = updated[subject].filter((_, i) => i !== idx);
+    setVideos(updated);
+    await storage.set(`videos_${subject}`, updated[subject], true);
+  };
+
+  const handleMusicUpload = async (e) => {
+    const files = e.target.files;
+    if (!files) return;
+    const newTracks = [...musicLibrary];
+    for (const file of files) {
+      if (!file.type.startsWith('audio/')) continue;
+      if (file.size > 4.5 * 1024 * 1024) {
+        alert(`"${file.name}" is over ~4.5 MB. Storage limit is 5 MB per item. Use a smaller file or compress it.`);
+        continue;
+      }
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => res(ev.target.result);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      newTracks.push({
+        title: file.name.replace(/\.[^.]+$/, ''),
+        dataUrl,
+        size: file.size,
+      });
+    }
+    setMusicLibrary(newTracks);
+    e.target.value = '';
+  };
+
+  const removeTrack = (idx) => {
+    setMusicLibrary(musicLibrary.filter((_, i) => i !== idx));
+  };
+
+  const tabs = [
+    { id: 'exams', label: 'Exam Dates' },
+    { id: 'music', label: 'Music' },
+    { id: 'videos', label: 'YouTube Videos' },
+    { id: 'reset', label: 'Reset Data' },
+  ];
+
+  return (
+    <div className="min-h-screen px-4 md:px-8 py-6 fade-in max-w-4xl mx-auto">
+      <header className="flex items-center justify-between mb-8">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 rounded-lg hover:bg-white/10"><ChevronLeft className="w-5 h-5" /></button>
+          <Lock className="w-5 h-5 text-amber-300" />
+          <h1 className="text-2xl font-light" style={{ fontFamily: 'Georgia, serif' }}>Admin Panel</h1>
+        </div>
+      </header>
+
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-6">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`px-4 py-2 rounded-lg whitespace-nowrap ${activeTab === t.id ? 'bg-white/15 border border-white/30' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`}
+          >{t.label}</button>
+        ))}
+      </div>
+
+      {activeTab === 'exams' && (
+        <div className="glass rounded-2xl p-5">
+          <h3 className="text-lg font-medium mb-4">Exam Dates</h3>
+          <div className="space-y-3">
+            {Object.entries(examDates).map(([subj, date]) => (
+              <div key={subj} className="flex items-center gap-3">
+                <div className="w-24 capitalize text-white/70">{subj}</div>
+                <input
+                  type="datetime-local"
+                  value={date.slice(0, 16)}
+                  onChange={(e) => setExamDates({ ...examDates, [subj]: e.target.value + ':00' })}
+                  className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-white/40 mt-4">Saved automatically. Visible to all users.</div>
+        </div>
+      )}
+
+      {activeTab === 'music' && (
+        <div className="glass rounded-2xl p-5">
+          <h3 className="text-lg font-medium mb-4">Music Library</h3>
+          <label className="block mb-4">
+            <span className="text-sm text-white/70 mb-2 block">Upload MP3 files</span>
+            <input
+              type="file"
+              accept="audio/*"
+              multiple
+              onChange={handleMusicUpload}
+              className="block w-full text-sm text-white/70 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-amber-400 file:text-black file:font-medium hover:file:bg-amber-300"
+            />
+            <div className="text-xs text-white/40 mt-2">
+              Max ~4.5 MB per file. For longer tracks, compress to lower bitrate (e.g. 96 kbps) first.
+            </div>
+          </label>
+          <div className="space-y-2">
+            {musicLibrary.length === 0 && <div className="text-sm text-white/40 italic">No tracks yet.</div>}
+            {musicLibrary.map((t, i) => (
+              <div key={i} className="flex items-center gap-3 p-3 bg-white/5 rounded-lg">
+                <Music className="w-4 h-4 text-white/60" />
+                <div className="flex-1 truncate text-sm">{t.title}</div>
+                <div className="text-xs text-white/40">{(t.size / 1024 / 1024).toFixed(2)} MB</div>
+                <button onClick={() => removeTrack(i)} className="text-red-400 hover:text-red-300 p-1">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'videos' && (
+        <div className="glass rounded-2xl p-5">
+          <h3 className="text-lg font-medium mb-4">YouTube Videos</h3>
+          <div className="space-y-3 mb-6">
+            <div className="flex gap-2">
+              <select value={videoSubject} onChange={(e) => setVideoSubject(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-3 py-2">
+                <option value="science" className="bg-slate-800">Science</option>
+                <option value="math" className="bg-slate-800">Math</option>
+                <option value="humanities" className="bg-slate-800">Humanities</option>
+                <option value="french" className="bg-slate-800">French</option>
+              </select>
+              <input
+                type="text"
+                value={newVideoTitle}
+                onChange={(e) => setNewVideoTitle(e.target.value)}
+                placeholder="Video title (optional)"
+                className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2"
+              />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newVideoUrl}
+                onChange={(e) => setNewVideoUrl(e.target.value)}
+                placeholder="https://youtube.com/watch?v=..."
+                className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2"
+              />
+              <button onClick={addVideo} className="px-4 py-2 rounded-lg bg-amber-400 text-black font-medium hover:bg-amber-300">
+                <Plus className="w-4 h-4 inline" /> Add
+              </button>
+            </div>
+          </div>
+          {Object.entries(videos).map(([subj, vids]) => (
+            <div key={subj} className="mb-4">
+              <div className="text-sm font-medium capitalize mb-2 text-white/70">{subj} ({vids.length})</div>
+              {vids.length === 0 ? (
+                <div className="text-xs text-white/40 italic">No videos.</div>
+              ) : (
+                <div className="space-y-1">
+                  {vids.map((v, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2 bg-white/5 rounded text-sm">
+                      <Youtube className="w-4 h-4 text-red-400" />
+                      <div className="flex-1 truncate">{v.title || v.url}</div>
+                      <button onClick={() => removeVideo(subj, i)} className="text-red-400"><Trash2 className="w-3 h-3" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'reset' && (
+        <div className="glass rounded-2xl p-5">
+          <h3 className="text-lg font-medium mb-2">Reset Data</h3>
+          <p className="text-sm text-white/60 mb-4">Be careful â€” these actions cannot be undone.</p>
+          <button
+            onClick={async () => {
+              if (!confirm('Reset YOUR personal progress? Other users keep theirs.')) return;
+              const profile = await storage.get('profile_local');
+              if (profile) {
+                await storage.delete(`progress_${profile.username}`);
+                alert('Your progress has been reset. Reload the page.');
+              }
+            }}
+            className="w-full mb-2 py-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200"
+          >
+            Reset My Progress Only
+          </button>
+          <button
+            onClick={async () => {
+              if (!confirm('Wipe ALL leaderboard data (everyone\'s progress)? This cannot be undone.')) return;
+              const userKeys = await storage.list('user_', true);
+              for (const k of userKeys) await storage.delete(k, true);
+              alert('Leaderboard wiped. Reload the page.');
+            }}
+            className="w-full py-3 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-200"
+          >
+            Wipe Entire Leaderboard
+          </button>
+        </div>
+      )}
+
+      <div style={{ height: '120px' }} />
+    </div>
+  );
+}
+
+// ============================================================
+// LEADERBOARD VIEW
+// ============================================================
+function LeaderboardView({ allUsers, currentUser, onBack }) {
+  const [sortBy, setSortBy] = useState('readiness');
+
+  const sorted = [...allUsers].sort((a, b) => {
+    if (sortBy === 'readiness') return (b.readiness || 0) - (a.readiness || 0);
+    if (sortBy === 'streak') return (b.streak || 0) - (a.streak || 0);
+    if (sortBy === 'quizzes') {
+      const aq = Object.values(a.progress || {}).reduce((sum, s) => sum + (s.totalQuizzes || 0), 0);
+      const bq = Object.values(b.progress || {}).reduce((sum, s) => sum + (s.totalQuizzes || 0), 0);
+      return bq - aq;
+    }
+    return 0;
+  });
+
+  return (
+    <div className="min-h-screen px-4 md:px-8 py-6 fade-in max-w-3xl mx-auto">
+      <header className="flex items-center gap-3 mb-6">
+        <button onClick={onBack} className="p-2 rounded-lg hover:bg-white/10"><ChevronLeft className="w-5 h-5" /></button>
+        <Trophy className="w-6 h-6 text-amber-300" />
+        <h1 className="text-2xl font-light" style={{ fontFamily: 'Georgia, serif' }}>Leaderboard</h1>
+      </header>
+
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {[
+          { id: 'readiness', label: 'Overall Readiness' },
+          { id: 'streak', label: 'Longest Streak' },
+          { id: 'quizzes', label: 'Most Quizzes' },
+        ].map(opt => (
+          <button
+            key={opt.id}
+            onClick={() => setSortBy(opt.id)}
+            className={`px-4 py-2 rounded-lg text-sm ${sortBy === opt.id ? 'bg-white/15 border border-white/30' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`}
+          >{opt.label}</button>
+        ))}
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="glass rounded-2xl p-12 text-center text-white/60">
+          No students on the leaderboard yet. Share the link with your friends to compete!
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((u, i) => {
+            const isMe = u.username === currentUser.username;
+            const totalQuizzes = Object.values(u.progress || {}).reduce((sum, s) => sum + (s.totalQuizzes || 0), 0);
+            return (
+              <div key={u.username} className={`glass rounded-2xl p-4 flex items-center gap-4 ${isMe ? 'border-amber-300/50 bg-amber-300/5' : ''}`}>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                  i === 0 ? 'bg-amber-300 text-amber-900' :
+                  i === 1 ? 'bg-slate-300 text-slate-900' :
+                  i === 2 ? 'bg-amber-700 text-amber-100' :
+                  'bg-white/10 text-white/70'
+                }`}>{i + 1}</div>
+                <div className="w-12 h-12 rounded-full overflow-hidden bg-white/10">
+                  {u.picture ? <img src={u.picture} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center font-bold">{u.realName[0]?.toUpperCase()}</div>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium flex items-center gap-2">
+                    {u.realName}
+                    {isMe && <span className="text-xs bg-amber-300/30 text-amber-200 px-2 py-0.5 rounded-full">You</span>}
+                  </div>
+                  <div className="text-xs text-white/50 truncate">@{u.username}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xl font-bold">
+                    {sortBy === 'readiness' && `${u.readiness || 0}%`}
+                    {sortBy === 'streak' && `${u.streak || 0}ðŸ”¥`}
+                    {sortBy === 'quizzes' && totalQuizzes}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-white/40">
+                    {sortBy === 'readiness' ? 'readiness' : sortBy === 'streak' ? 'day streak' : 'quizzes'}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ height: '120px' }} />
+    </div>
+  );
+}
+
+// ============================================================
+// PROFILE VIEW
+// ============================================================
+function ProfileView({ profile, progress, updateProfile, onBack, onLogout }) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(profile.realName);
+  const [editPic, setEditPic] = useState(profile.picture);
+
+  // Calculate achievements
+  const totalQuizzes = Object.values(progress).reduce((sum, s) => sum + (s.totalQuizzes || 0), 0);
+  const totalMocks = Object.values(progress).reduce((sum, s) => sum + (s.mockExamScores?.length || 0), 0);
+  const allQuizScores = Object.values(progress).flatMap(s => s.quizScores || []);
+  const avgQuiz = allQuizScores.length ? allQuizScores.reduce((a,b)=>a+b,0) / allQuizScores.length : 0;
+
+  const achievements = [
+    { id: 'first-quiz', name: 'First Quiz', desc: 'Complete your first quiz', earned: totalQuizzes >= 1 },
+    { id: '10-quizzes', name: '10 Quizzes', desc: 'Complete 10 quizzes', earned: totalQuizzes >= 10 },
+    { id: '50-quizzes', name: '50 Quizzes', desc: 'Complete 50 quizzes', earned: totalQuizzes >= 50 },
+    { id: '90-avg', name: '90% Average', desc: 'Maintain a 90% quiz average', earned: avgQuiz >= 0.9 && allQuizScores.length >= 5 },
+    { id: 'first-mock', name: 'First Mock Exam', desc: 'Complete a mock exam', earned: totalMocks >= 1 },
+    { id: '5-mocks', name: '5 Mock Exams', desc: 'Complete 5 mock exams', earned: totalMocks >= 5 },
+    { id: 'sci-complete', name: 'Science Master', desc: 'Complete all Science topics', earned: Object.values(progress.science?.topics || {}).filter(Boolean).length >= SCIENCE_TOPICS.length },
+    { id: 'math-complete', name: 'Math Master', desc: 'Complete all Math topics', earned: Object.values(progress.math?.topics || {}).filter(Boolean).length >= MATH_TOPICS.length },
+  ];
+
+  const earned = achievements.filter(a => a.earned);
+
+  const handlePicUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert('Max 2 MB image.'); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => setEditPic(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const saveEdits = () => {
+    updateProfile({ ...profile, realName: editName, picture: editPic });
+    setEditing(false);
+  };
+
+  return (
+    <div className="min-h-screen px-4 md:px-8 py-6 fade-in max-w-3xl mx-auto">
+      <header className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 rounded-lg hover:bg-white/10"><ChevronLeft className="w-5 h-5" /></button>
+          <h1 className="text-2xl font-light" style={{ fontFamily: 'Georgia, serif' }}>Profile</h1>
+        </div>
+        <button onClick={onLogout} className="text-sm text-white/60 hover:text-red-300 flex items-center gap-1">
+          <LogOut className="w-4 h-4" /> Sign out
+        </button>
+      </header>
+
+      <div className="glass rounded-2xl p-6 mb-6">
+        <div className="flex items-center gap-5 mb-4">
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full overflow-hidden bg-white/10 border-2 border-white/20">
+              {(editing ? editPic : profile.picture) ? (
+                <img src={editing ? editPic : profile.picture} alt="profile" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-blue-400 to-purple-400 flex items-center justify-center text-3xl font-bold">
+                  {profile.realName[0]?.toUpperCase()}
+                </div>
+              )}
+            </div>
+            {editing && (
+              <label className="absolute bottom-0 right-0 p-1.5 bg-blue-500 rounded-full cursor-pointer hover:bg-blue-400">
+                <Upload className="w-3 h-3" />
+                <input type="file" accept="image/*" onChange={handlePicUpload} className="hidden" />
+              </label>
+            )}
+          </div>
+          <div className="flex-1">
+            {editing ? (
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 w-full"
+              />
+            ) : (
+              <div className="text-2xl font-medium">{profile.realName}</div>
+            )}
+            <div className="text-sm text-white/50">@{profile.displayUsername || profile.username}</div>
+            <div className="text-xs text-white/40 mt-1">Joined {new Date(profile.joinedAt).toLocaleDateString()}</div>
+          </div>
+          {editing ? (
+            <div className="flex gap-2">
+              <button onClick={() => { setEditing(false); setEditName(profile.realName); setEditPic(profile.picture); }} className="px-3 py-2 rounded-lg bg-white/5">Cancel</button>
+              <button onClick={saveEdits} className="px-3 py-2 rounded-lg bg-blue-500 font-medium">Save</button>
+            </div>
+          ) : (
+            <button onClick={() => setEditing(true)} className="p-2 rounded-lg bg-white/5 hover:bg-white/10"><Edit3 className="w-4 h-4" /></button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 mt-4">
+          <div className="text-center p-3 bg-white/5 rounded-lg">
+            <div className="text-2xl font-bold">{totalQuizzes}</div>
+            <div className="text-xs text-white/50">Quizzes</div>
+          </div>
+          <div className="text-center p-3 bg-white/5 rounded-lg">
+            <div className="text-2xl font-bold">{Math.round(avgQuiz * 100)}%</div>
+            <div className="text-xs text-white/50">Quiz Avg</div>
+          </div>
+          <div className="text-center p-3 bg-white/5 rounded-lg">
+            <div className="text-2xl font-bold">{totalMocks}</div>
+            <div className="text-xs text-white/50">Mocks</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass rounded-2xl p-5 mb-6">
+        <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+          <Award className="w-5 h-5 text-amber-300" /> Achievements ({earned.length} / {achievements.length})
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {achievements.map(a => (
+            <div key={a.id} className={`p-3 rounded-xl text-center ${a.earned ? 'bg-amber-300/20 border border-amber-300/50' : 'bg-white/5 border border-white/10 opacity-50'}`} title={a.desc}>
+              <div className="text-2xl mb-1">{a.earned ? 'ðŸ†' : 'ðŸ”’'}</div>
+              <div className="text-xs font-medium">{a.name}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ height: '120px' }} />
+    </div>
+  );
+}
